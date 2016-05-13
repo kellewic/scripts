@@ -20,13 +20,15 @@ import tldextract
 site.addsitedir('./modules')
 from curlwrapper import CurlWrapper
 
-## DNSDB API stuff
-dnsdb_api_key = 'YOUR_API_KEY'
-dnsdb_base_url = 'https://api.dnsdb.info'
+## MUST ADD YOUR API KEY HERE
+## CAN ALSO PASS VIA COMMAND LINE
+dnsdb_api_key = ''
 
+## DNSDB API host and endpoints 
+dnsdb_base_url = 'https://api.dnsdb.info'
 dnsdb_base_rdata_path = "/lookup/rdata"
 dnsdb_base_rrset_path = "/lookup/rrset"
-headers = ['X-API-Key: {0}'.format(dnsdb_api_key), 'Accept: application/json']
+headers = None
 
 
 ## Handler for DNSDB queries. The return value is structured as JSON 
@@ -35,38 +37,61 @@ headers = ['X-API-Key: {0}'.format(dnsdb_api_key), 'Accept: application/json']
 ## 'data'	=> the data associated with the subject queried
 ## 'error'	=> an error string describing any error condition
 ##
-def get_dnsdb_data(subject=None, path=dnsdb_base_rdata_path, args=None):
+def get_dnsdb_data(subject=None, args=None):
     ## Default return value
-    data = dict(error='No subject')
+    data = dict(error='No subject', data=None)
+    paths = []
 
     try:
         ## Determine if we have an IP or a Name
         rdata_type = 'ip'
+        prefix = ''
+
+        if re.match("^.*?,\d+$", subject):
+            (subject, prefix) = subject.split(',')
 
         try:
             ipaddr.IPv4Address(subject)
         except ipaddr.AddressValueError:
-            rdata_type = 'name'
+            try:
+                ipaddr.IPv6Address(subject)
+            except:
+                rdata_type = 'name'
 
-        ## Construct the DNSDB API path
-        url = "{0}{1}".format(dnsdb_base_url, "{0}/{1}/{2}".format(path, rdata_type, subject))
+        ## IPs are only valid with the rdata endpoint
+        if rdata_type == 'ip':
+            paths.append(dnsdb_base_rdata_path)
+            
+            if prefix != '':
+                subject = "{0},{1}".format(subject, prefix)
+
+        else:
+            if args.use_rdata:
+                paths.append(dnsdb_base_rdata_path)
+
+            if args.use_rrset:
+                paths.append(dnsdb_base_rrset_path)
 
         c = CurlWrapper()
-        ret_data = c.get("{0}?limit={1:d}".format(url, args.limit), headers=headers)
-        c.reset_cookies()
 
-        ## The API will return nothing if the name or IP is not found
-        if not ret_data:
-            ## Try again with an rrset query or bail if we already did
-            if path != dnsdb_base_rrset_path:
-                return get_dnsdb_data(subject, path=dnsdb_base_rrset_path, args=args)
+        for path in paths:
+            ## Construct the API path
+            url = "{0}{1}".format(dnsdb_base_url, "{0}/{1}/{2}".format(path, rdata_type, subject))
+            ret_data = c.get("{0}?limit={1:d}".format(url, args.limit), headers=headers)
+            c.reset_cookies()
 
-            data['data'] = ret_data
-            data['error'] = "No information on %s" % subject
-        else:
-            ## Process the returned JSON data
-            data['data'] = [json.loads(s) for s in ret_data.strip().split("\n")]
-            data['error'] = None
+            ## Check for errors
+            if re.match('^Error:', ret_data):
+                data['error'] = re.sub('^Error:\s*', '', ret_data)
+
+            else:
+                ## Process the returned JSON data
+                if data['data'] is None:
+                    data['data'] = [json.loads(s) for s in ret_data.strip().split("\n")]
+                else:
+                    data['data'].extend([json.loads(s) for s in ret_data.strip().split("\n")])
+
+                data['error'] = None
 
     except Exception, e:
         data['error'] = "%s: %s" % (e.__class__.__name__, str(e))
@@ -124,7 +149,47 @@ if __name__ == "__main__":
         help="How many records to return; default is 10,000"
     )
 
+    ## Perform query using rdata endpoint
+    arg_parser.add_argument(
+        "--use-rdata",
+        action="store_true",
+        default=False,
+        help="perform query using rdata endpoint"
+    )
+
+    ## Perform query using rrset endpoint
+    arg_parser.add_argument(
+        "--use-rrset",
+        action="store_true",
+        default=False,
+        help="perform query using rrset endpoint"
+    )
+
+    ## API key
+    arg_parser.add_argument(
+        "--api-key",
+        help="DNSDB API key"
+    )
+
+    ## Stop if an error is encountered
+    arg_parser.add_argument(
+        "--stop-on-error",
+        action="store_true",
+        default=False,
+        help="stop processing if an error is encountered (CSV only)"
+    )
+
     (args, params) = arg_parser.parse_known_args()
+
+    if args.use_rrset is False and args.use_rdata is False:
+        print "You must specify --use-rdata, --use-rrset, or both"
+        sys.exit()
+
+    ## API key on command line overrides one set in the script
+    if args.api_key is not None:
+        dnsdb_api_key = args.api_key
+
+    headers = ['X-API-Key: {0}'.format(dnsdb_api_key), 'Accept: application/json']
 
     ## Store filters for TLDs
     tld_filter = []
@@ -161,7 +226,12 @@ if __name__ == "__main__":
         json_data = json.loads(json_data)
 
         ## If we received an error, skip this entry
-        if json_data["error"] is not None: continue
+        if json_data["error"] is not None:
+            if args.stop_on_error is True:
+                print "Error: {0}".format(json_data["error"])
+                sys.exit();
+            else:
+                continue
 
         ## Service does not always return the answer in a JSON array
         ## so force all of them into an array.
