@@ -1,5 +1,3 @@
-[Blog post](http://blog.nyble.com/2016/05/using-dnsdb-to-get-pdns-data-python.html) for dnsdb.py
-
 Everything in the modules directory is needed to run dnsdb.py.
 
 
