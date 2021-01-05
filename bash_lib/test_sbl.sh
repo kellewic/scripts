@@ -21,14 +21,3 @@ string_lstrip "...   Help   ..." .
 string_rstrip "...   Help   ..." .
 string_strip  "...   Help   ..." .
 
-## TODO: Lockfile routines
-##
-## lockfile_create - register an on_exit command to remove it if specified
-##		lockfile_create [dir] [template] [remove_on_exit flag]
-##			dir defaults to TMPDIR, if dir is specified cache TMPDIR, replace it, restore it
-##			template defaults to XXXX
-##			remove_on_exit flag defaults to on
-##		returns name of file created
-##
-##
-
